@@ -184,10 +184,12 @@ cdef class _WorkerData:
     cdef int task_count
     cdef int task_serial
     cdef object read_lock
+    cdef object read_lock_asyncio
     cdef int active_readers
 
     def __init__(self):
         self.read_lock = trio.Lock()
+        self.read_lock_asyncio = asyncio.Lock()
         self.active_readers = 0
 
     cdef get_name(self):
@@ -254,3 +256,64 @@ async def _session_loop(nursery, int min_tasks, int max_tasks):
     log.debug('%s: terminated', name)
     stdlib.free(buf.mem)
     worker_data.task_count -= 1
+
+
+async def _wait_fuse_readable_asyncio():
+    worker_data.active_readers += 1
+    async with worker_data.read_lock_asyncio:
+        future = asyncio.Future()
+        loop = asyncio.get_event_loop()
+        loop.add_reader(session_fd, future.set_result, None)
+        future.add_done_callback(lambda f: loop.remove_reader(session_fd))
+        await future
+
+    worker_data.active_readers -= 1
+
+
+@async_wrapper
+async def _session_loop_asyncio(int min_tasks, int max_tasks, name):
+    sub_tasks = []
+    cdef int res
+    cdef fuse_buf buf
+
+    buf.mem = NULL
+    buf.size = 0
+    buf.pos = 0
+    buf.flags = 0
+    while not fuse_session_exited(session):
+        if worker_data.active_readers > min_tasks:
+            log.debug('%s: too many idle tasks (%d total, %d waiting), terminating.',
+                      name, worker_data.task_count, worker_data.active_readers)
+            break
+        await _wait_fuse_readable_asyncio()
+        res = fuse_session_receive_buf(session, &buf)
+        if not worker_data.active_readers and worker_data.task_count < max_tasks:
+            worker_data.task_count += 1
+            log.debug('%s: No tasks waiting, starting another worker (now %d total).',
+                      name, worker_data.task_count)
+            sub_tasks.append(asyncio.create_task(_session_loop_asyncio(min_tasks, max_tasks, worker_data.get_name())))
+
+        if res == -errno.EINTR:
+            continue
+        elif res < 0:
+            raise OSError(-res, 'fuse_session_receive_buf failed with '
+                          + strerror(-res))
+        elif res == 0:
+            break
+
+        # When fuse_session_process_buf() calls back into one of our handler
+        # methods, the handler will start a co-routine and store it in
+        # py_retval.
+        #log.debug('%s: processing request...', name)
+        save_retval(None)
+        fuse_session_process_buf(session, &buf)
+        if py_retval is not None:
+            await py_retval
+        #log.debug('%s: processing complete.', name)
+
+    log.debug('%s: terminated', name)
+    stdlib.free(buf.mem)
+    worker_data.task_count -= 1
+
+    # Wait until all subtasks are finished
+    await asyncio.gather(sub_tasks)

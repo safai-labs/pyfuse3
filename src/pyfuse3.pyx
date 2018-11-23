@@ -61,6 +61,7 @@ cdef extern from *:
 
 from pickle import PicklingError
 from queue import Queue
+import asyncio
 import logging
 import os
 import os.path
@@ -727,6 +728,21 @@ async def main(int min_tasks=1, int max_tasks=99):
             worker_data.task_serial = 1
             nursery.start_soon(_session_loop, nursery, min_tasks, max_tasks,
                                name=worker_data.get_name())
+    finally:
+        if _notify_queue is not None:
+            _notify_queue.put(None)
+
+@async_wrapper
+async def main_asyncio(int min_tasks=1, int max_tasks=99):
+    '''Run FUSE main loop with asyncio'''
+
+    if session == NULL:
+        raise RuntimeError('Need to call init() before main()')
+
+    try:
+        worker_data.task_count = 1
+        worker_data.task_serial = 1
+        await _session_loop_asyncio(min_tasks, max_tasks, worker_data.get_name())
     finally:
         if _notify_queue is not None:
             _notify_queue.put(None)
