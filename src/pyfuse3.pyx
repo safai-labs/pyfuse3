@@ -716,33 +716,24 @@ def init(ops, mountpoint, options=default_options):
 
 
 @async_wrapper
-async def main(int min_tasks=1, int max_tasks=99):
+async def main(int min_tasks=1, int max_tasks=99, aio='trio'):
     '''Run FUSE main loop'''
 
     if session == NULL:
         raise RuntimeError('Need to call init() before main()')
 
     try:
-        async with trio.open_nursery() as nursery:
-            worker_data.task_count = 1
-            worker_data.task_serial = 1
-            nursery.start_soon(_session_loop, nursery, min_tasks, max_tasks,
-                               name=worker_data.get_name())
-    finally:
-        if _notify_queue is not None:
-            _notify_queue.put(None)
-
-@async_wrapper
-async def main_asyncio(int min_tasks=1, int max_tasks=99):
-    '''Run FUSE main loop with asyncio'''
-
-    if session == NULL:
-        raise RuntimeError('Need to call init() before main()')
-
-    try:
-        worker_data.task_count = 1
-        worker_data.task_serial = 1
-        await _session_loop_asyncio(min_tasks, max_tasks, worker_data.get_name())
+        if aio == 'trio':
+            async with trio.open_nursery() as nursery:
+                worker_data.task_count = 1
+                worker_data.task_serial = 1
+                name = worker_data.get_name()
+                nursery.start_soon(_session_loop, nursery, min_tasks, max_tasks,
+                                   name, aio, name=name)
+        elif aio == 'asyncio':
+            await _session_loop(None, min_tasks, max_tasks, worker_data.get_name(), aio)
+        else:
+            raise ValueError('Invalid aio value, must be trio or asyncio')
     finally:
         if _notify_queue is not None:
             _notify_queue.put(None)
