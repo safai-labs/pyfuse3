@@ -66,7 +66,10 @@ import logging
 import os
 import os.path
 import sys
-import trio
+try:
+    import trio
+except ImportError:
+    trio = None
 import threading
 
 import _pyfuse3
@@ -724,6 +727,8 @@ async def main(int min_tasks=1, int max_tasks=99, aio='trio'):
 
     try:
         if aio == 'trio':
+            if trio is None:
+                raise RuntimeError('trio unavailable')
             async with trio.open_nursery() as nursery:
                 worker_data.task_count = 1
                 worker_data.task_serial = 1
