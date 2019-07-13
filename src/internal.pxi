@@ -183,12 +183,24 @@ cdef class _WorkerData:
 
     cdef int task_count
     cdef int task_serial
+    cdef object aio
     cdef object read_lock
     cdef int active_readers
 
     def __init__(self):
-        self.read_lock = trio.Lock()
+        self.aio = None
+        self.read_lock = None
         self.active_readers = 0
+
+    def ensure_aio(self, aio):
+        if self.aio is None:
+            self.aio = aio
+            if aio == 'trio':
+                self.read_lock = trio.Lock()
+            elif aio == 'asyncio':
+                self.read_lock = asyncio.Lock()
+        elif self.aio != aio:
+            raise RuntimeError('Cannot switch aio implementations')
 
     cdef get_name(self):
         self.task_serial += 1
@@ -198,42 +210,54 @@ cdef class _WorkerData:
 # the trio module.
 cdef _WorkerData worker_data
 
-async def _wait_fuse_readable():
-    #name = trio.hazmat.current_task().name
+async def _wait_fuse_readable(name, aio):
     worker_data.active_readers += 1
     #log.debug('%s: Waiting for read lock...', name)
     async with worker_data.read_lock:
         #log.debug('%s: Waiting for fuse fd to become readable...', name)
-        await trio.hazmat.wait_readable(session_fd)
+        if aio == 'trio':
+            await trio.hazmat.wait_readable(session_fd)
+        elif aio == 'asyncio':
+            future = asyncio.Future()
+            loop = asyncio.get_event_loop()
+            loop.add_reader(session_fd, future.set_result, None)
+            future.add_done_callback(lambda f: loop.remove_reader(session_fd))
+            await future
 
     worker_data.active_readers -= 1
     #log.debug('%s: fuse fd readable, unparking next task.', name)
 
 
 @async_wrapper
-async def _session_loop(nursery, int min_tasks, int max_tasks):
+async def _session_loop(nursery, int min_tasks, int max_tasks, name, aio):
     cdef int res
     cdef fuse_buf buf
 
-    name = trio.hazmat.current_task().name
+    if aio == 'asyncio':
+        sub_tasks = []
 
     buf.mem = NULL
     buf.size = 0
     buf.pos = 0
     buf.flags = 0
+    worker_data.ensure_aio(aio)
     while not fuse_session_exited(session):
         if worker_data.active_readers > min_tasks:
             log.debug('%s: too many idle tasks (%d total, %d waiting), terminating.',
                       name, worker_data.task_count, worker_data.active_readers)
             break
-        await _wait_fuse_readable()
+        await _wait_fuse_readable(name, aio)
         res = fuse_session_receive_buf(session, &buf)
         if not worker_data.active_readers and worker_data.task_count < max_tasks:
             worker_data.task_count += 1
             log.debug('%s: No tasks waiting, starting another worker (now %d total).',
                       name, worker_data.task_count)
-            nursery.start_soon(_session_loop, nursery, min_tasks, max_tasks,
-                               name=worker_data.get_name())
+            if aio == 'trio':
+                name = worker_data.get_name()
+                nursery.start_soon(_session_loop, nursery, min_tasks, max_tasks,
+                                   name, aio, name=name)
+            elif aio == 'asyncio':
+                sub_tasks.append(asyncio.create_task(_session_loop(None, min_tasks, max_tasks, worker_data.get_name(), aio)))
 
         if res == -errno.EINTR:
             continue
@@ -256,3 +280,6 @@ async def _session_loop(nursery, int min_tasks, int max_tasks):
     log.debug('%s: terminated', name)
     stdlib.free(buf.mem)
     worker_data.task_count -= 1
+
+    if aio == 'asyncio':
+        await asyncio.gather(*sub_tasks)
