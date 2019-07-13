@@ -17,18 +17,21 @@ import os
 # Will be injected by pyfuse3 extension module
 FUSEError = None
 
-__all__ = [ 'Operations', 'async_wrapper' ]
+__all__ = ['Operations', 'async_wrapper']
 
 log = logging.getLogger(__name__)
 
 # Any top level trio coroutines (i.e., coroutines that are passed
 # to trio.run) must be pure-Python. This wrapper ensures that this
 # is the case for Cython-defined async functions.
+
+
 def async_wrapper(fn):
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         await fn(*args, **kwargs)
     return wrapper
+
 
 class Operations:
     '''
@@ -119,7 +122,6 @@ class Operations:
 
         raise FUSEError(errno.ENOSYS)
 
-
     async def setattr(self, inode, attr, fields, fh, ctx):
         '''Change attributes of *inode*
 
@@ -154,7 +156,6 @@ class Operations:
         '''
 
         raise FUSEError(errno.ENOSYS)
-
 
     async def mknod(self, parent_inode, name, mode, rdev, ctx):
         '''Create (possibly special) file
@@ -253,7 +254,7 @@ class Operations:
         raise FUSEError(errno.ENOSYS)
 
     async def rename(self, parent_inode_old, name_old, parent_inode_new,
-               name_new, flags, ctx):
+                     name_new, flags, ctx):
         '''Rename a directory entry.
 
         This method must rename *name_old* in the directory with inode
@@ -397,7 +398,6 @@ class Operations:
 
         raise FUSEError(errno.ENOSYS)
 
-
     async def readdir(self, fh, start_id, token):
         '''Read entries in open directory *fh*.
 
@@ -474,7 +474,8 @@ class Operations:
         for threadId, frame in sys._current_frames().items():
             code.append("\n# ThreadID: %s" % threadId)
             for filename, lineno, name, line in traceback.extract_stack(frame):
-                code.append('%s:%d, in %s' % (os.path.basename(filename), lineno, name))
+                code.append('%s:%d, in %s' %
+                            (os.path.basename(filename), lineno, name))
                 if line:
                     code.append("    %s" % (line.strip()))
 
@@ -526,7 +527,6 @@ class Operations:
         '''
 
         raise FUSEError(errno.ENOSYS)
-
 
     async def access(self, inode, mode, ctx):
         '''Check if requesting process has *mode* rights on *inode*.
