@@ -52,6 +52,7 @@ if DEVELOPER_MODE:
     # We can't use `error`, because e.g. Sphinx triggers a
     # DeprecationWarning.
     warnings.simplefilter('default')
+DEVELOPER_MODE=False
 
 # Add src to load path, important for Sphinx autodoc
 # to work properly
